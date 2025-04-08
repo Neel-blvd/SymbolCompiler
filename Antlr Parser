@@ -1,0 +1,80 @@
+parser grammar ExprParser;
+options { tokenVocab=ExprLexer; }
+
+program
+    : stat EOF
+    ;
+
+stat: varDecl SC
+    | expr SC
+    | funcDecl SC
+    | ifStat SC
+    | whileStat SC
+    | readStat SC
+    | writeStat SC
+    ;
+    
+varDecl
+    : type ID EQ expr SC
+    ;
+    
+funcDecl
+    : DEF ID LPAREN paramList RPAREN LCURLY stat* RCURLY
+    ;
+
+paramList
+    : type ID (COMMA type ID)*
+    |                       
+    ;
+    
+readStat
+    : ID EQ READ LPAREN RPAREN
+    ;
+    
+writeStat
+    : WRITE LPAREN (STRING*|type) RPAREN
+    ;
+
+ifStat
+    : IF LPAREN expr RPAREN LCURLY stat* RCURLY ELSE stat*
+    ;
+
+whileStat : WHILE LPAREN expr RPAREN LCURLY stat* RCURLY
+    ;
+
+idops : ID PLUS PLUS 
+    | ID MINUS MINUS
+    | ID PLUS EQ ID
+    | ID MINUS EQ ID
+    ;
+
+for : FOR LPAREN varDecl SC expr SC idops RPAREN LCURLY stat* RCURLY
+    ;
+
+type
+    : INT
+    | BOOL
+    | FLOAT
+    ;
+
+relop
+    : LESS
+    | GREATER
+    | EQ EQ
+    | LESS EQ
+    | GREATER EQ
+    ;
+
+expr: ID
+    | INTEGER
+    | NOT expr
+    | expr AND expr
+    | expr OR expr
+    | expr PLUS expr
+    | expr MINUS expr
+    | expr DIVIDES expr
+    | expr MULS expr
+    | expr relop expr
+    ;
+
+func : ID '(' expr (',' expr)* ')' ;
