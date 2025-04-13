@@ -10,6 +10,11 @@
     "generate:parser": "antlr4ng -visitor -o src/lib/generated lib/grammars/grammar.g4"
   },
   "dependencies": {
+    "antlr4": "^4.13.2",
+    "child_process": "^1.0.2",
+    "emscripten": "^0.0.2-beta",
+    "fs-extra": "^11.3.0",
+    "google-closure-compiler": "^20240317.0.0",
     "next": "15.2.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -20,10 +25,11 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
+    "@types/emscripten": "^1.40.1",
+    "@types/fs-extra": "^11.0.4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "antlr4ts": "^0.5.0-alpha.4",
     "antlr4ts-cli": "^0.5.0-alpha.4",
     "eslint": "^9",
     "eslint-config-next": "15.2.4",
