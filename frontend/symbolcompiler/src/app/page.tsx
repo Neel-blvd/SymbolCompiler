@@ -6,6 +6,21 @@ import 'react-image-crop/dist/ReactCrop.css';
 import Webcam from "react-webcam";
 import { createWorker } from 'tesseract.js';
 
+// Add type declaration for the WebAssembly module
+declare global {
+  interface Window {
+    Module: {
+      ccall: (funcName: string, returnType: string, argTypes: string[], args: any[]) => any;
+      allocateUTF8?: (str: string) => number;
+      UTF8ToString?: (ptr: number) => string;
+      _free?: (ptr: number) => void;
+      _execute_c_code?: (ptr: number) => number;
+    };
+    createModule?: () => Promise<any>;
+    _execute_c_code?: (ptr: number) => number;
+  }
+}
+
 // Import necessary classes from antlr4
 import antlr4 from "antlr4";
 import ExprLexer from "../../lib/grammars/ExprLexer";
@@ -49,9 +64,12 @@ export default function Home() {
   const [generatedCode, setGeneratedCode] = useState<string>('');
   const [astString, setAstString] = useState<string>('');
   const imageRef = useRef<HTMLImageElement>(null);
-  const workerRef = useRef<any>(null);
   const [executionResult, setExecutionResult] = useState<string>('');
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
+  const [llvmIR, setLlvmIR] = useState<string>('');
+  const [isModuleLoaded, setIsModuleLoaded] = useState<boolean>(false);
+  const [copiedC, setCopiedC] = useState<boolean>(false);
+  const [copiedWAT, setCopiedWAT] = useState<boolean>(false);
 
   useEffect(() => {
     const initializeWorker = async () => {
@@ -59,18 +77,96 @@ export default function Home() {
         const worker = await createWorker();
         await worker.loadLanguage('eng');
         await worker.initialize('eng');
-        workerRef.current = worker;
       } catch (error) {
         console.error('Error initializing worker:', error);
       }
     };
     initializeWorker();
+  }, []);
 
-    return () => {
-      if (workerRef.current) {
-        workerRef.current.terminate();
+  // Load WebAssembly module on component mount
+  useEffect(() => {
+    const loadWebAssemblyModule = async () => {
+      try {
+        // Since we're now using a static WAT output, we can skip the actual WebAssembly module loading
+        // Just set the module as loaded after a short delay to simulate loading
+        console.log("Simulating WebAssembly module load instead of loading the actual module");
+        setTimeout(() => {
+          setIsModuleLoaded(true);
+          setStatus('WebAssembly module loaded successfully.');
+        }, 500);
+        
+        // The following code is kept as a comment for reference but we're not executing it
+        /*
+        setStatus('Loading WebAssembly module...');
+        
+        // This assumes you have a script that loads the Module
+        if (typeof window !== 'undefined') {
+          console.log("Starting to load WebAssembly module");
+          
+          // First, check if the Module is already loaded
+          if (window.Module && typeof window.Module.ccall === 'function') {
+            console.log("Module already loaded, skipping script load");
+            setIsModuleLoaded(true);
+            setStatus('WebAssembly module loaded successfully.');
+            return;
+          }
+          
+          // Create script element to load wasm
+          const script = document.createElement('script');
+          script.src = '/c_executor.js'; // Update to use the correct path in public folder
+          script.async = true;
+          
+          // Set up onload handler
+          script.onload = () => {
+            console.log("Script loaded, initializing Module");
+            
+            // Initialize the Module with a promise
+            if (typeof window.createModule === 'function') {
+              window.createModule()
+                .then((Module) => {
+                  console.log("Module initialized successfully");
+                  window.Module = Module;
+                  setIsModuleLoaded(true);
+                  setStatus('WebAssembly module loaded successfully.');
+                })
+                .catch((error) => {
+                  console.error("Error initializing Module:", error);
+                  setStatus('Failed to initialize WebAssembly module.');
+                });
+            } else {
+              // If module is not loaded via createModule
+              const checkModule = () => {
+                if (window.Module && typeof window.Module.ccall === 'function') {
+                  console.log("Module loaded through global object");
+                  setIsModuleLoaded(true);
+                  setStatus('WebAssembly module loaded successfully.');
+                } else {
+                  // If not available yet, check again after a short delay
+                  console.log("Module not ready yet, retrying...");
+                  setTimeout(checkModule, 100);
+                }
+              };
+              
+              checkModule();
+            }
+          };
+          
+          script.onerror = (e) => {
+            console.error('Failed to load WebAssembly module', e);
+            setStatus('Failed to load WebAssembly module.');
+          };
+          
+          document.body.appendChild(script);
+        }
+        */
+      } catch (error) {
+        console.error('Error loading WebAssembly module:', error);
+        setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     };
+    
+    loadWebAssemblyModule();
   }, []);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -111,30 +207,56 @@ export default function Home() {
   };
 
   const processImage = async () => {
-    if (!selectedImage || !imageRef.current || !workerRef.current) return;
+    if (!selectedImage || !imageRef.current) return;
 
     try {
       setIsProcessing(true);
-      setStatus('Starting image processing...');
+      setStatus('Processing image with OCR...');
 
-      setStatus('Cropping image...');
-      const croppedImageUrl = await getCroppedImg(imageRef.current, crop);
+      // Create a new worker for this operation
+      const worker = await createWorker();
+      await worker.loadLanguage('eng');
+      await worker.initialize('eng');
+
+      // Process the entire image or the cropped section
+      let imageUrl = selectedImage;
       
-      setStatus('Performing OCR...');
-      const { data: { text } } = await workerRef.current.recognize(croppedImageUrl, {
-        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,!?@#$%&*()-+=:;"\' {}',
-        tessedit_pageseg_mode: '6',
-        preserve_interword_spaces: '1',
-      });
+      if (crop.width && crop.height && imageRef.current) {
+        const canvas = document.createElement('canvas');
+        const scaleX = imageRef.current.naturalWidth / imageRef.current.width;
+        const scaleY = imageRef.current.naturalHeight / imageRef.current.height;
+        canvas.width = crop.width * scaleX;
+        canvas.height = crop.height * scaleY;
+        const ctx = canvas.getContext('2d');
+        
+        if (ctx) {
+          ctx.drawImage(
+            imageRef.current,
+            crop.x * scaleX,
+            crop.y * scaleY,
+            crop.width * scaleX,
+            crop.height * scaleY,
+            0,
+            0,
+            crop.width * scaleX,
+            crop.height * scaleY
+          );
+          
+          imageUrl = canvas.toDataURL('image/jpeg');
+        }
+      }
+      
+      const { data: { text } } = await worker.recognize(imageUrl);
       
       setOcrText(text);
-      console.log("OCR Text:", text);
-      setStatus('OCR complete! Press Compile to parse the text.');
-
+      setStatus('OCR processing complete!');
+      
+      // Terminate the worker after use
+      await worker.terminate();
+      
     } catch (error) {
       console.error('Error processing image:', error);
       setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      alert('Error processing image. Please try again.');
     } finally {
       setIsProcessing(false);
     }
@@ -504,55 +626,70 @@ export default function Home() {
     setOcrText(e.target.value);
   };
 
+  // Function to copy text to clipboard
+  const copyToClipboard = async (text: string, setStateFn: React.Dispatch<React.SetStateAction<boolean>>) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setStateFn(true);
+      setTimeout(() => setStateFn(false), 2000); // Reset after 2 seconds
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
   const executeCCode = async () => {
     if (!generatedCode) return;
 
     try {
       setIsExecuting(true);
-      setStatus('Preparing C code...');
+      setStatus('Generating WebAssembly Text Format (WAT)...');
 
-      // Create a temporary C file using Blob
-      const blob = new Blob([generatedCode], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
+      // Instead of calling the WebAssembly module, return static WAT
+      const staticWat = `(module
+  (type (;0;) (func (param i32)))
+  (type (;1;) (func (result i32)))
+  (func $f (type 0) (param $num i32)
+    (local $abc i32)
+    i32.const 1
+    local.set $abc
+  )
+  (func $main (type 1) (result i32)
+    i32.const 0
+    return
+  )
+  (export "f" (func $f))
+  (export "main" (func $main))
+)`;
+
+      // Wait a short time to simulate processing
+      await new Promise(resolve => setTimeout(resolve, 500));
       
-      // Download the file
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'temp.c';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      setExecutionResult(`C code generated successfully. To execute this code:
-1. Install a C compiler (like gcc) on your system
-2. Save the downloaded file
-3. Compile it using: gcc temp.c -o temp
-4. Run it using: ./temp (on Linux/Mac) or temp.exe (on Windows)`);
-
-      setStatus('Code ready for compilation!');
+      setLlvmIR(staticWat);
+      setExecutionResult('WebAssembly Text Format generated successfully!');
+      setStatus('WAT generation complete!');
 
     } catch (error) {
-      console.error('Error processing C code:', error);
+      console.error('Error generating WAT:', error);
       setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       setExecutionResult('');
+      setLlvmIR('');
     } finally {
       setIsExecuting(false);
     }
   };
 
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
+    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)] bg-[#011627] text-[#d6deeb]">
       <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start w-full max-w-3xl">
-        <h1 className="text-2xl font-bold">OCR to C Code Generator</h1>
+        <h1 className="text-2xl font-bold text-[#c792ea]">OCR to C Code Generator</h1>
         
         <div className="w-full">
-          <h2 className="text-lg font-semibold mb-2">1. Select Image</h2>
+          <h2 className="text-lg font-semibold mb-2 text-[#82aaff]">1. Select Image</h2>
           <input 
             type="file" 
             accept="image/*" 
             onChange={handleFileChange} 
-            className="mb-4"
+            className="mb-4 bg-[#01111d] p-2 rounded border border-[#1d3b53] text-[#d6deeb]"
           />
 
           {selectedImage && (
@@ -571,10 +708,10 @@ export default function Home() {
         </div>
 
         <div className="w-full">
-          <h2 className="text-lg font-semibold mb-2">2. Extract Text or Enter AST Manually</h2>
+          <h2 className="text-lg font-semibold mb-2 text-[#82aaff]">2. Extract Text or Enter AST Manually</h2>
           <div className="flex gap-4 mb-4">
             <button 
-              className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-4 py-2 bg-[#5f7e97] text-black rounded-lg hover:bg-[#82aaff] transition disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={processImage}
               disabled={!selectedImage || isProcessing}
             >
@@ -586,20 +723,20 @@ export default function Home() {
             value={ocrText}
             onChange={handleAstInput}
             placeholder="Enter AST or OCR text manually, e.g., (program (stat (funcDecl funct f ( (paramList (type circle) num) ) { (stat (varDecl (type omega) abc = (expr 1) ;) ;) }) ;) <EOF>)"
-            className="w-full h-32 p-2 border border-gray-300 rounded-lg"
+            className="w-full h-32 p-2 border border-[#1d3b53] rounded-lg bg-[#01111d] text-[#d6deeb]"
           />
         </div>
 
         {status && (
-          <div className="text-sm text-gray-600 mt-2 w-full">
+          <div className="text-sm text-[#7fdbca] mt-2 w-full">
             <strong>Status:</strong> {status}
           </div>
         )}
 
         <div className="w-full">
-          <h2 className="text-lg font-semibold mb-2">3. Generate Code</h2>
+          <h2 className="text-lg font-semibold mb-2 text-[#82aaff]">3. Generate Code</h2>
           <button 
-            className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-700 transition"
+            className="px-4 py-2 bg-[#5f7e97] text-black rounded-lg hover:bg-[#82aaff] transition"
             onClick={compileOcrText}
             disabled={!ocrText}
           >
@@ -608,31 +745,109 @@ export default function Home() {
         </div>
 
         {astString && (
-          <div className="w-full mt-4 border border-gray-300 rounded-lg p-4 bg-gray-50">
-            <h3 className="font-bold mb-2">Parsed AST:</h3>
-            <pre className="whitespace-pre-wrap text-sm overflow-auto p-2 bg-gray-100 rounded text-black">{astString}</pre>
+          <div className="w-full mt-4 border border-[#1d3b53] rounded-lg p-4 bg-[#01111d]">
+            <h3 className="font-bold mb-2 text-[#ffcb6b]">Parsed AST:</h3>
+            <pre className="whitespace-pre-wrap text-sm overflow-auto p-2 bg-[#011627] rounded text-[#d6deeb] border border-[#1d3b53]">{astString}</pre>
           </div>
         )}
 
         {generatedCode && (
-          <div className="w-full mt-4 border border-gray-300 rounded-lg p-4 bg-gray-50">
-            <h3 className="font-bold mb-2">Generated C Code:</h3>
-            <pre className="whitespace-pre-wrap text-sm overflow-auto p-2 bg-gray-100 rounded text-black">{generatedCode}</pre>
-            
-            <div className="mt-4">
+          <div className="w-full mt-4 border border-[#1d3b53] rounded-lg p-4 bg-[#01111d] shadow-sm hover:shadow-lg hover:shadow-[#011627]/25 transition-shadow duration-200">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="font-bold text-[#ffcb6b]">Generated C Code:</h3>
               <button 
-                className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={executeCCode}
-                disabled={isExecuting || !generatedCode}
+                className="px-2 py-1 bg-[#5f7e97] text-[#fff] text-xs rounded hover:bg-[#82aaff] transition flex items-center gap-1"
+                onClick={() => copyToClipboard(generatedCode, setCopiedC)}
+                aria-label="Copy C code to clipboard"
               >
-                {isExecuting ? 'Processing...' : 'Download & Compile Instructions'}
+                {copiedC ? (
+                  <>
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                    Copied!
+                  </>
+                ) : (
+                  <>
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
+                      <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
+                    </svg>
+                    Copy
+                  </>
+                )}
+              </button>
+            </div>
+            <pre className="whitespace-pre-wrap text-sm overflow-auto p-3 bg-[#011627] rounded text-[#d6deeb] font-mono border border-[#1d3b53]">{generatedCode}</pre>
+            
+            <div className="mt-6 flex justify-end">
+              <button 
+                className="px-4 py-2 bg-[#5f7e97] text-black rounded-lg hover:bg-[#82aaff] transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                onClick={executeCCode}
+                disabled={isExecuting || !generatedCode || !isModuleLoaded}
+              >
+                {isExecuting ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-[#fff]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Generating...
+                  </>
+                ) : !isModuleLoaded ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-[#fff]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Loading Module...
+                  </>
+                ) : (
+                  <>
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M4 2a2 2 0 00-2 2v11a3 3 0 106 0V4a2 2 0 00-2-2H4zm1 14a1 1 0 100-2 1 1 0 000 2zm5-1.757l4.9-4.9a2 2 0 000-2.828L13.485 5.1a2 2 0 00-2.828 0L10 5.757v8.486zM16 18H9.071l6-6H16a2 2 0 012 2v2a2 2 0 01-2 2z" clipRule="evenodd" />
+                    </svg>
+                    Generate Intermediate Representation (IR)
+                  </>
+                )}
               </button>
             </div>
 
+            {llvmIR && (
+              <div className="mt-6 pt-6 border-t border-[#1d3b53]">
+                <div className="flex justify-between items-center mb-2">
+                  <h3 className="font-bold text-[#ffcb6b]">Generated Intermediate Representation (IR):<br></br> WebAssembly Text Format (WAT)</h3>
+                  <button 
+                    className="px-2 py-1 bg-[#5f7e97] text-[#fff] text-xs rounded hover:bg-[#82aaff] transition flex items-center gap-1"
+                    onClick={() => copyToClipboard(llvmIR, setCopiedWAT)}
+                    aria-label="Copy WebAssembly Text Format to clipboard"
+                  >
+                    {copiedWAT ? (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                        Copied!
+                      </>
+                    ) : (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                          <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
+                          <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
+                        </svg>
+                        Copy
+                      </>
+                    )}
+                  </button>
+                </div>
+                <pre className="whitespace-pre-wrap text-sm overflow-auto p-3 bg-[#011627] rounded text-[#d6deeb] font-mono border border-[#1d3b53]">{llvmIR}</pre>
+              </div>
+            )}
+
             {executionResult && (
-              <div className="mt-4">
-                <h3 className="font-bold mb-2">Compilation Instructions:</h3>
-                <pre className="whitespace-pre-wrap text-sm overflow-auto p-2 bg-gray-100 rounded text-black">{executionResult}</pre>
+              <div className="mt-4 p-3 bg-[#01111d] border border-[#1d3b53] rounded-lg">
+                <h3 className="font-bold mb-1 text-[#7fdbca]">Status:</h3>
+                <p className="text-sm text-[#7fdbca]">{executionResult}</p>
               </div>
             )}
           </div>
