@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@webassemblyjs/wasm-gen": "^1.14.1",
+    "@webassemblyjs/wast-parser": "^1.14.1"
+  }
+}

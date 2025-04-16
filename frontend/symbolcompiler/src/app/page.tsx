@@ -267,6 +267,9 @@ export default function Home() {
     // Helper function for indentation
     const indent = (level: number): string => '  '.repeat(level);
     
+    // Keep track of all function declarations
+    const functionDeclarations: {name: string, params: {type: string, name: string}[]}[] = [];
+    
     // Helper function to translate grammar types to C types
     const translateType = (grammarType: string): string => {
       const typeMap: TypeMap = {
@@ -291,10 +294,12 @@ export default function Home() {
     };
 
     // Helper function to process parameter lists
-    const processParamList = (paramListNode: TreeNode): string => {
-      if (!paramListNode || paramListNode.getChildCount() === 0) return '';
+    const processParamList = (paramListNode: TreeNode): {code: string, params: {type: string, name: string}[]} => {
+      if (!paramListNode || paramListNode.getChildCount() === 0) return {code: '', params: []};
       
       const params: string[] = [];
+      const paramObjs: {type: string, name: string}[] = [];
+      
       for (let i = 0; i < paramListNode.getChildCount(); i++) {
         const child = paramListNode.getChild(i);
         if (child.ruleIndex === ExprParser.RULE_type) {
@@ -303,14 +308,16 @@ export default function Home() {
           if (i + 1 < paramListNode.getChildCount()) {
             const nameNode = paramListNode.getChild(i + 1);
             if (nameNode.symbol && nameNode.symbol.type === ExprLexer.ID) {
-              params.push(`${type} ${nameNode.getText()}`);
+              const paramName = nameNode.getText();
+              params.push(`${type} ${paramName}`);
+              paramObjs.push({type, name: paramName});
               i++; // Skip the name node in the next iteration
             }
           }
         }
       }
       
-      return params.join(', ');
+      return {code: params.join(', '), params: paramObjs};
     };
 
     // Main recursive function to process AST nodes
@@ -359,7 +366,13 @@ export default function Home() {
           
           // Process parameters
           const paramListNode = node.getChild(3);
-          const params = processParamList(paramListNode);
+          const { code: params, params: paramObjs } = processParamList(paramListNode);
+          
+          // Track this function for later use in main
+          functionDeclarations.push({
+            name: fnName,
+            params: paramObjs
+          });
           
           // Find the function body (statements inside braces)
           let bodyCode = '';
@@ -581,7 +594,49 @@ export default function Home() {
     };
     
     // Start processing from the root
-    return processNode(tree);
+    const generatedCode = processNode(tree);
+    
+    // Generate a main function that calls all declared functions with input parameters
+    let mainFunction = '';
+    if (functionDeclarations.length > 0) {
+      mainFunction = '\nint main() {\n';
+      
+      // For each function, scan inputs and call the function
+      functionDeclarations.forEach(func => {
+        // Declare variables for parameters
+        func.params.forEach(param => {
+          mainFunction += `  ${param.type} ${param.name}_input;\n`;
+        });
+        
+        // Instructions to user
+        if (func.params.length > 0) {
+          mainFunction += `  printf("Enter parameters for function ${func.name}:\\n");\n`;
+          
+          // Scan for each parameter
+          func.params.forEach(param => {
+            // Use appropriate format specifier based on parameter type
+            let formatSpecifier = '%d';
+            if (param.type === 'float') formatSpecifier = '%f';
+            else if (param.type === 'bool') formatSpecifier = '%d';
+            
+            mainFunction += `  printf("Enter ${param.name} (${param.type}): ");\n`;
+            mainFunction += `  scanf("${formatSpecifier}", &${param.name}_input);\n`;
+          });
+          
+          // Call the function with scanned parameters
+          mainFunction += `  ${func.name}(${func.params.map(p => p.name + '_input').join(', ')});\n`;
+        } else {
+          // No parameters, just call the function
+          mainFunction += `  ${func.name}();\n`;
+        }
+        
+        mainFunction += '\n';
+      });
+      
+      mainFunction += '  return 0;\n}\n';
+    }
+    
+    return generatedCode + mainFunction;
   };
 
   const compileOcrText = () => {
