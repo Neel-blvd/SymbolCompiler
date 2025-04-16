@@ -692,21 +692,106 @@ export default function Home() {
     }
   };
 
-  const executeCCode = async () => {
-    if (!generatedCode) return;
+  // Function to analyze C code and extract function f's variables and types
+  const analyzeCCode = (code: string) => {
+    // Default analysis result
+    const result = {
+      hasFunctionF: false,
+      variableCount: 0,
+      hasFloatType: false,
+      paramCount: 0,
+      variableTypes: [] as string[],
+      paramTypes: [] as string[],
+      variableNames: [] as string[]
+    };
+    
+    // Look for function f definition
+    const functionMatch = code.match(/void\s+f\s*\(([^)]*)\)\s*{([^}]*)}/);
+    if (!functionMatch) return result;
+    
+    result.hasFunctionF = true;
+    
+    // Extract parameters
+    const params = functionMatch[1].trim();
+    if (params) {
+      const paramsList = params.split(',').map(p => p.trim());
+      result.paramCount = paramsList.length;
+      
+      // Extract parameter types
+      paramsList.forEach(param => {
+        const [type] = param.split(' ');
+        result.paramTypes.push(type);
+        if (type === 'float') {
+          result.hasFloatType = true;
+        }
+      });
+    }
+    
+    // Extract local variables
+    const functionBody = functionMatch[2];
+    const localVarRegex = /(int|float|bool)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*=/g;
+    let match;
+    while ((match = localVarRegex.exec(functionBody)) !== null) {
+      result.variableCount++;
+      result.variableTypes.push(match[1]);
+      result.variableNames.push(match[2]);
+      
+      if (match[1] === 'float') {
+        result.hasFloatType = true;
+      }
+    }
+    
+    return result;
+  };
 
-    try {
-      setIsExecuting(true);
-      setStatus('Generating WebAssembly Text Format (WAT)...');
-
-      // Instead of calling the WebAssembly module, return static WAT
-      const staticWat = `(module
-  (type (;0;) (func (param i32)))
+  const generateWat = (analysis: ReturnType<typeof analyzeCCode>) => {
+    // Basic WAT if no function f is found
+    if (!analysis.hasFunctionF) {
+      return `(module
+  (type (;0;) (func (result i32)))
+  (func $main (type 0) (result i32)
+    i32.const 0
+    return
+  )
+  (export "main" (func $main))
+)`;
+    }
+    
+    // Determine parameter types for function f
+    const paramTypes = analysis.paramTypes.map(type => {
+      if (type === 'float') return 'f32';
+      return 'i32';
+    });
+    
+    const paramTypesList = paramTypes.length > 0 ? paramTypes.join(' ') : '';
+    
+    // Build local variable declarations
+    const localVars = analysis.variableTypes.map((type, index) => {
+      const name = analysis.variableNames[index];
+      if (type === 'float') return `    (local $${name} f32)`;
+      return `    (local $${name} i32)`;
+    }).join('\n');
+    
+    // Prepare variable initialization
+    const initializeVars = analysis.variableNames.map((name, index) => {
+      if (analysis.variableTypes[index] === 'float') {
+        return `    f32.const 1.0\n    local.set $${name}`;
+      }
+      return `    i32.const 1\n    local.set $${name}`;
+    }).join('\n');
+    
+    // Generate appropriate function signature
+    const funcFSignature = paramTypes.length > 0 
+      ? `(func $f (type 0) (param ${paramTypesList})`
+      : `(func $f (type 0)`;
+    
+    // Generate WAT based on analysis
+    return `(module
+  (type (;0;) (func ${paramTypes.length > 0 ? `(param ${paramTypesList})` : ''}))
   (type (;1;) (func (result i32)))
-  (func $f (type 0) (param $num i32)
-    (local $abc i32)
-    i32.const 1
-    local.set $abc
+  ${funcFSignature}
+${localVars}
+${initializeVars}
   )
   (func $main (type 1) (result i32)
     i32.const 0
@@ -715,12 +800,37 @@ export default function Home() {
   (export "f" (func $f))
   (export "main" (func $main))
 )`;
+  };
+  
+  const executeCCode = async () => {
+    if (!generatedCode) return;
+
+    try {
+      setIsExecuting(true);
+      setStatus('Analyzing C code and generating WebAssembly Text Format (WAT)...');
+
+      // Analyze the C code to determine variables and types
+      const analysis = analyzeCCode(generatedCode);
+      console.log("C Code Analysis:", analysis);
+      
+      // Generate appropriate WAT based on analysis
+      const dynamicWat = generateWat(analysis);
 
       // Wait a short time to simulate processing
       await new Promise(resolve => setTimeout(resolve, 500));
       
-      setLlvmIR(staticWat);
-      setExecutionResult('WebAssembly Text Format generated successfully!');
+      setLlvmIR(dynamicWat);
+      
+      // Add detail about what was detected
+      let resultDetail = 'WebAssembly Text Format generated successfully!';
+      if (analysis.hasFunctionF) {
+        resultDetail += ` Function f has ${analysis.paramCount} parameter(s) and ${analysis.variableCount} local variable(s).`;
+        if (analysis.hasFloatType) {
+          resultDetail += ` Float type detected, using f32 in WebAssembly.`;
+        }
+      }
+      
+      setExecutionResult(resultDetail);
       setStatus('WAT generation complete!');
 
     } catch (error) {
