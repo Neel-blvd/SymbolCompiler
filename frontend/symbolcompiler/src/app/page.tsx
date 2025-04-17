@@ -326,6 +326,10 @@ export default function Home() {
       
       // For terminal nodes
       if (node.symbol) {
+        // Handle left_triangle as printf
+        if (node.getText() === 'left_triangle') {
+          return 'printf';
+        }
         return node.getText();
       }
       
@@ -339,6 +343,26 @@ export default function Home() {
           // Handle different statement types
           const childNode = node.getChild(0);
           let statCode: string = processNode(childNode, level);
+          
+          // Handle return statements within a stat node
+          if (childNode.getText().startsWith('return')) {
+            // Extract the expression after 'return'
+            let returnExpr = '';
+            // If the return has an expression
+            if (childNode.getChildCount() > 1) {
+              for (let i = 0; i < childNode.getChildCount(); i++) {
+                const child = childNode.getChild(i);
+                if (child.getText() !== 'return') {
+                  returnExpr = processNode(child, 0);
+                  break;
+                }
+              }
+              statCode = `${indent(level)}return ${returnExpr}`;
+            } else {
+              // Simple return without expression
+              statCode = `${indent(level)}return`;
+            }
+          }
           
           // Add semicolon if not already present
           if (!statCode.trim().endsWith(';') && 
@@ -540,7 +564,12 @@ export default function Home() {
           // Handle different expression types
           if (node.getChildCount() === 1) {
             // Simple identifier or integer
-            return node.getText();
+            const text = node.getText();
+            // Convert left_triangle to printf if it's a direct node
+            if (text === 'left_triangle') {
+              return 'printf';
+            }
+            return text;
           } else if (node.getChildCount() === 2 && node.getChild(0).getText() === '~') {
             // Negation: ~expr
             return `!${processNode(node.getChild(1), 0)}`;
@@ -588,8 +617,29 @@ export default function Home() {
           return `${funcName}(${args.join(', ')})`;
           
         default:
-          // For unhandled rules, return the raw text
-          return node.getText();
+          // For unhandled rules or direct text processing, check for return statements
+          const nodeText = node.getText();
+          if (nodeText.startsWith('return') && node.getChildCount() > 1) {
+            // Process return statements even if they're not in a specific rule
+            // Find the expression after 'return'
+            let returnExpr = '';
+            for (let i = 0; i < node.getChildCount(); i++) {
+              const child = node.getChild(i);
+              if (child.getText() !== 'return') {
+                returnExpr = processNode(child, 0);
+                break;
+              }
+            }
+            return `${indent(level)}return ${returnExpr};`;
+          }
+          
+          // Handle simple 'return' without expression
+          if (nodeText === 'return') {
+            return `${indent(level)}return;`;
+          }
+          
+          // For all other unhandled rules, return the raw text
+          return nodeText;
       }
     };
     
